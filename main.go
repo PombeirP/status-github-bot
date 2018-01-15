@@ -22,9 +22,10 @@ const (
 )
 
 var (
-	client *github.Client
-	ctx    context.Context
-	config installationConfig
+	client   *github.Client
+	ctx      context.Context
+	config   installationConfig
+	useCases []botUseCase
 )
 
 func main() {
@@ -37,10 +38,15 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, logger))
 
 	ctx = context.Background()
+	useCases = make([]botUseCase, 0)
+	// TODO: Add new use cases here
+	useCases = append(useCases, &assignNewPRToReviewUseCase{})
 
 	config = loadConfig()
 	if config.InstallationID != 0 {
-		initInstallation()
+		if err := initInstallation(ctx); err != nil {
+			os.Exit(1)
+		}
 	}
 
 	hook := gh_webhooks.New(&gh_webhooks.Config{Secret: config.WebhookSecret})
@@ -54,13 +60,14 @@ func main() {
 	}
 }
 
-func initInstallation() {
+func initInstallation(ctx context.Context) error {
 	log.Printf("INFO: Initializing installation for app with ID #%d and installation ID #%d", config.ApplicationID, config.InstallationID)
 
 	// Wrap the shared transport for use with the integration ID authenticating with installation ID.
 	itr, err := ghinstallation.NewKeyFromFile(http.DefaultTransport, config.ApplicationID, config.InstallationID, "./status-github-bot.private-key.pem")
 	if err != nil {
 		log.Fatalf("FATAL: %s. Exiting\n", err)
+		return err
 	}
 
 	// Use installation transport with client.
@@ -69,7 +76,8 @@ func initInstallation() {
 	for _, repoInfo := range config.RepositoriesMap {
 		projects, _, err := client.Repositories.ListProjects(ctx, repoInfo.Owner, repoInfo.Name, &github.ProjectListOptions{State: "open"})
 		if err != nil {
-			log.Fatalf("FATAL: %s. Exiting\n", err)
+			log.Printf("WARN: %s. Exiting\n", err)
+			continue
 		}
 		var project *github.Project
 		for _, project = range projects {
@@ -78,30 +86,17 @@ func initInstallation() {
 			}
 		}
 		if repoInfo.ProjectID == 0 {
-			log.Fatalf("FATAL: Could not find project named '%s'. Exiting\n", config.ProjectBoardName)
+			log.Printf("FATAL: Could not find project named '%s'. Exiting\n", config.ProjectBoardName)
+			continue
 		}
-
 		log.Printf("DEBUG: Found project named '%s'. ID is %d\n", project.GetName(), repoInfo.ProjectID)
 
-		columns, _, err := client.Projects.ListProjectColumns(ctx, repoInfo.ProjectID, nil)
-		if err != nil {
-			log.Printf("ERROR: %s\n", err)
-			return
-		}
-		reviewColumn := getColumnFromName(columns, config.ReviewColumnName)
-		if reviewColumn == nil {
-			log.Printf("ERROR: Could not find '%s' column in project board\n", config.ReviewColumnName)
-			return
-		}
-		repoInfo.ReviewColumnID = reviewColumn.GetID()
-		log.Printf("DEBUG: Found project column '%s'. ID is %d\n", reviewColumn.GetName(), repoInfo.ReviewColumnID)
-	}
-}
-
-func getColumnFromName(columns []*github.ProjectColumn, name string) *github.ProjectColumn {
-	for _, column := range columns {
-		if column.GetName() == name {
-			return column
+		// Initialize use cases
+		for _, useCase := range useCases {
+			err = useCase.Init(ctx, repoInfo)
+			if err != nil {
+				break
+			}
 		}
 	}
 

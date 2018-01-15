@@ -11,11 +11,23 @@ import (
 func handleGitHubEvent(payload interface{}, header webhooks.Header) {
 	log.Printf("DEBUG: Received %s event\n", header["X-Github-Event"])
 
-	switch payload.(type) {
+	switch pl := payload.(type) {
 	case gh_webhooks.InstallationPayload:
 		handleIntegrationInstallation(payload, header)
-	case gh_webhooks.PullRequestPayload:
-		handlePullRequest(payload, header)
+	case gh_webhooks.PullRequestPayload: // TODO: Add types required for new use cases in this case statement
+		repoID := repoID(pl.Repository.ID)
+		repoName := pl.Repository.Name
+
+		repoInfo, found := config.RepositoriesMap[repoID]
+		if !found {
+			log.Printf("DEBUG: Event is not for a known repo (applies to %s), ignoring.\n", repoName)
+			return
+		}
+
+		// Allow any usecases to execute on this event
+		for _, useCase := range useCases {
+			useCase.Execute(ctx, repoInfo, payload)
+		}
 	}
 }
 
@@ -57,27 +69,10 @@ func handleIntegrationInstallation(payload interface{}, header webhooks.Header) 
 			config.RepositoriesMap[repoID(repo.ID)] = &repoInfo{ID: repoID(repo.ID), Owner: strings.Split(repo.FullName, "/")[0], Name: repo.Name}
 		}
 
-		initInstallation()
+		if err := initInstallation(ctx); err != nil {
+			return
+		}
 	}
 
 	saveConfig(&config)
-}
-
-// handlePullRequest handles GitHub pull_request events
-func handlePullRequest(payload interface{}, header webhooks.Header) {
-	pl := payload.(gh_webhooks.PullRequestPayload)
-
-	switch pl.Action {
-	case "opened":
-		log.Printf("INFO: Handling Pull Request #%d\n", pl.PullRequest.Number)
-
-		repoInfo, found := config.RepositoriesMap[repoID(pl.Repository.ID)]
-		if !found {
-			log.Printf("DEBUG: PR is not for a known repo (applies to %s), ignoring.\n", pl.Repository.Name)
-			return
-		}
-
-		// If a new PR is open, assign it to the REVIEW column
-		assignIssueToReview(ctx, repoInfo, pl.Number)
-	}
 }
