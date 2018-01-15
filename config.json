@@ -1,0 +1,6 @@
+{
+    "port": 3016,
+    "webhook_secret": "c2c94fb5ccce32f4e4baf229480ad81391c787a7",
+    "project_board_name": "Pipeline for QA",
+    "review_column_name": "REVIEW"
+}
